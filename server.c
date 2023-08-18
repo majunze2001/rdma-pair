@@ -61,6 +61,7 @@ init_buffer()
 	{
 		snprintf(str, sizeof(str), "Page [%d]", i);
 		strcpy(buffer + i * PAGE_SIZE, str);
+		printf("set %s\n", str);
 	}
 }
 
@@ -219,7 +220,7 @@ main(int argc, char **argv)
 	printf("key: %u\n", mr->rkey);
 	printf("addr: %lx\n", (uintptr_t)buffer);
 	init_buffer();
-	
+
 	// Create completion queue
 	printf("Creating completion queue...\n");
 	cq = ibv_create_cq(conn->verbs, 10, NULL, NULL, 0);

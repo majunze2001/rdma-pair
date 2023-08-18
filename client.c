@@ -22,6 +22,7 @@
 #define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
 // #define PROFILE
+#define PROFILE_READ
 // #define EXIT
 // #define UVM
 
@@ -55,6 +56,10 @@ volatile sig_atomic_t exit_requested = false;
 FILE *log_file = NULL; // Global file descriptor
 #endif
 
+#ifdef PROFILE_READ
+FILE *log_file = NULL; // Global file descriptor
+#endif
+
 // Function to post a receive work request
 void
 post_receive()
@@ -82,7 +87,10 @@ void read_page(uintptr_t addr)
     struct ibv_send_wr send_wr, *bad_send_wr = NULL;
     struct ibv_sge send_sge;
     struct ibv_wc wc;
-
+#ifdef PROFILE_READ
+	struct timespec start_time, end_time;
+	clock_gettime(CLOCK_MONOTONIC, &start_time);
+#endif
     // Initialize the send work request
     memset(&send_wr, 0, sizeof(send_wr));
     send_wr.wr_id = 1;
@@ -114,6 +122,13 @@ void read_page(uintptr_t addr)
         exit(1);
     }
 
+#ifdef PROFILE_READ
+	clock_gettime(CLOCK_MONOTONIC, &end_time);
+	long total_time = (end_time.tv_sec - start_time.tv_sec) * 1e9 +
+	                  (end_time.tv_nsec - start_time.tv_nsec);
+	fprintf(log_file, "total_time %ld\n", total_time);
+	fflush(log_file);
+#endif
     // Print the fetched data as a string
     printf("Fetched data: %s\n", buffer);
 }
@@ -239,6 +254,7 @@ sigint_handler(int signum)
 	printf("SIGINT received. Sending request to server...\n");
 	// send_request_and_receive_response();
 	read_page(server_addr + (next_page % REMOTE_PAGENUM) * REMOTE_SIZE);
+	next_page++;
 #ifdef EXIT
 	exit_requested = true;
 #endif
@@ -282,6 +298,14 @@ main(int argc, char **argv)
 
 #ifdef PROFILE
 	log_file = fopen("timing_log_immediate.txt", "a");
+	if (!log_file)
+	{
+		perror("Failed to open log file");
+		return 1;
+	}
+#endif
+#ifdef PROFILE_READ
+	log_file = fopen("read_log.txt", "a");
 	if (!log_file)
 	{
 		perror("Failed to open log file");
@@ -466,6 +490,9 @@ cleanup:
 
 	printf("Client finished successfully.\n");
 #ifdef PROFILE
+	fclose(log_file);
+#endif
+#ifdef PROFILE_READ
 	fclose(log_file);
 #endif
 	return 0;
