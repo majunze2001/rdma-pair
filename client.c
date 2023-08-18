@@ -253,7 +253,7 @@ sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
 	// send_request_and_receive_response();
-	read_page(server_addr + (next_page % REMOTE_PAGENUM) * REMOTE_SIZE);
+	read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
 	next_page++;
 #ifdef EXIT
 	exit_requested = true;
