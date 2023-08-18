@@ -14,10 +14,12 @@
 #include <stdatomic.h>
 #include <stdbool.h> // Add this line
 
-// Define constants
-#define BUFFER_SIZE (2 * 1024 * 1024 + 4 * 1024) // 2MB + 4KB
-#define SET_BUFFER 0x12345678 // also sets PID as current
+// Define constants -- client will always use 2MB for read from now on
+#define BUFFER_SIZE (2 * 1024 * 1024) // 2MB + 4KB
+#define SET_BUFFER 0x12345678         // also sets PID as current
 #define FAULT_HANDLED 0x12345679
+#define REMOTE_PAGENUM 10
+#define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
 // Define global variables
 struct rdma_cm_id *conn = NULL;
@@ -34,6 +36,7 @@ struct mr_info
 {
 	uintptr_t remote_addr;
 	uint32_t rkey;
+	size_t mem_size; // used for client request allocation
 };
 
 // Define global mutex and atomic flag
@@ -46,7 +49,6 @@ volatile sig_atomic_t exit_requested = false;
 #ifdef PROFILE
 FILE *log_file = NULL; // Global file descriptor
 #endif
-
 
 // Function to post a receive work request
 void
@@ -160,25 +162,18 @@ send_request_and_receive_response()
 	// log
 	long total_time = (end_time.tv_sec - start_time.tv_sec) * 1e9 +
 	                  (end_time.tv_nsec - start_time.tv_nsec);
-
 	long lock_time = (time1.tv_sec - start_time.tv_sec) * 1e9 +
 	                 (time1.tv_nsec - start_time.tv_nsec);
-
 	long ps_time = (time2.tv_sec - time1.tv_sec) * 1e9 +
 	               (time2.tv_nsec - time1.tv_nsec);
-
 	long ws_time = (time3.tv_sec - time2.tv_sec) * 1e9 +
 	               (time3.tv_nsec - time2.tv_nsec);
-
 	long pr_time = (time4.tv_sec - time3.tv_sec) * 1e9 +
 	               (time4.tv_nsec - time3.tv_nsec);
-
 	long wr_time = (time5.tv_sec - time4.tv_sec) * 1e9 +
 	               (time5.tv_nsec - time4.tv_nsec);
-
 	long unlock_time = (end_time.tv_sec - time5.tv_sec) * 1e9 +
 	                   (end_time.tv_nsec - time5.tv_nsec);
-
 	fprintf(log_file, "total_time %ld\n", total_time);
 	fprintf(log_file, "lock_time %ld\n", lock_time);
 	fprintf(log_file, "ps_time %ld\n", ps_time);
@@ -187,7 +182,6 @@ send_request_and_receive_response()
 	fprintf(log_file, "wr_time %ld\n", wr_time);
 	fprintf(log_file, "unlock_time %ld\n", unlock_time);
 	fflush(log_file); // Ensure it's written immediately
-
 	printf("Received response from server: %s\n", buffer);
 #endif
 }
@@ -197,9 +191,9 @@ sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
 	send_request_and_receive_response();
-	#ifdef EXIT
+#ifdef EXIT
 	exit_requested = true;
-	#endif
+#endif
 }
 
 #ifdef UVM
@@ -346,7 +340,7 @@ main(int argc, char **argv)
 
 	printf("Connecting...\n");
 	struct rdma_conn_param cm_params = {0};
-	struct mr_info mr_info = {(uintptr_t)buffer, mr->rkey};
+	struct mr_info mr_info = {(uintptr_t)buffer, mr->rkey, REMOTE_SIZE};
 	cm_params.private_data = &mr_info;
 	cm_params.private_data_len = sizeof(mr_info);
 	cm_params.responder_resources = 1;
@@ -366,7 +360,7 @@ main(int argc, char **argv)
 
 	if (event->event == RDMA_CM_EVENT_ESTABLISHED)
 	{
-		struct mr_info * server_mr = (struct mr_info *)event->param.conn.private_data;
+		struct mr_info *server_mr = (struct mr_info *)event->param.conn.private_data;
 		if (server_mr == NULL)
 		{
 			fprintf(stderr, "Private data is NULL\n");
@@ -384,7 +378,6 @@ main(int argc, char **argv)
 		fprintf(stderr, "Unexpected event: %s\n", rdma_event_str(event->event));
 		return 1;
 	}
-
 
 #ifdef UVM
 	fd = open("/dev/nvidia-uvm", O_RDWR);
@@ -404,12 +397,12 @@ main(int argc, char **argv)
 	while (1)
 	{
 		pause(); // Wait for a signal to be caught
-		#ifdef EXIT
+#ifdef EXIT
 		if (exit_requested)
 		{
 			goto cleanup;
 		}
-		#endif
+#endif
 	}
 
 cleanup:

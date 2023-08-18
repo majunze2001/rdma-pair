@@ -14,6 +14,7 @@ struct mr_info
 {
 	uintptr_t remote_addr;
 	uint32_t rkey;
+	size_t mem_size; // used for client request allocation
 };
 
 // Global variables
@@ -27,6 +28,7 @@ struct ibv_qp_init_attr qp_attr;
 char *buffer;
 uint64_t client_addr;
 uint32_t client_rkey;
+size_t buffer_size;
 
 // Function to post a receive work request
 void post_receive()
@@ -166,9 +168,11 @@ int main(int argc, char **argv)
 		}
 		memcpy(&client_addr, &client_mr->remote_addr, sizeof(client_addr));
 		memcpy(&client_rkey, &client_mr->rkey, sizeof(client_rkey));
+		memcpy(&buffer_size, &client_mr->mem_size, sizeof(buffer_size));
 
 		printf("client_addr: %lx\n", client_addr);
 		printf("client_rkey: %u\n", client_rkey);
+		printf("buffer_size: %lx\n", buffer_size);
 	}
 	conn = event->id;
 	rdma_ack_cm_event(event);
