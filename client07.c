@@ -121,26 +121,7 @@ handshake()
 
 	post_receive();
 
-	// Wait for server's RDMA Write with Immediate Data containing its buffer address and rkey
-	printf("Waiting for server's buffer address and rkey...\n");
-	while (ibv_poll_cq(cq, 1, &wc) < 1)
-	{
-	}
-	if (wc.status != IBV_WC_SUCCESS || wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM)
-	{
-		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
-		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
-		exit(1);
-	}
-	printf("Received server's buffer address and rkey.\n");
-
-	// Extract server's buffer address and rkey from the payload
-	memcpy(&server_addr, buffer, sizeof(server_addr));
-	memcpy(&server_rkey, buffer + sizeof(server_addr), sizeof(server_rkey));
-	printf("server_rkey: %u\n", server_rkey);
-	printf("server_addr: %lx\n", server_addr);
-
-	printf("Handshake success...\n");
+	printf("Client: Handshake success...\n");
 }
 
 void
@@ -422,8 +403,11 @@ main(int argc, char **argv)
 	server_mr = (struct mr_info *)event->param.conn.private_data;
 	rdma_ack_cm_event(event);
 
-	// printf("key: %u - %u\n", mr->rkey, server_mr->rkey);
-	// printf("addr: %lx - %lx\n", (uintptr_t)buffer, server_mr->remote_addr);
+	// Extract server's buffer address and rkey from the payload
+	memcpy(&server_mr->remote_addr, buffer, sizeof(server_addr));
+	memcpy(&server_mr->rkey, buffer + sizeof(server_addr), sizeof(server_rkey));
+	printf("server_rkey: %u\n", server_rkey);
+	printf("server_addr: %lx\n", server_addr);
 
 	printf("key: %u\n", mr->rkey);
 	printf("addr: %lx\n", (uintptr_t)buffer);
