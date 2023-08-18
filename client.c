@@ -14,16 +14,12 @@
 #include <stdatomic.h>
 #include <stdbool.h> // Add this line
 
-// #define PROFILE
-// #define UVM
-// #define EXIT
-
-// BUFFER_SIZE ALL ACROSS
+// Define constants
 #define BUFFER_SIZE (2 * 1024 * 1024 + 4 * 1024) // 2MB + 4KB
-
 #define SET_BUFFER 0x12345678 // also sets PID as current
 #define FAULT_HANDLED 0x12345679
 
+// Define global variables
 struct rdma_cm_id *conn = NULL;
 struct ibv_pd *pd;
 struct ibv_mr *mr;
@@ -40,20 +36,19 @@ struct mr_info
 	uint32_t rkey;
 };
 
-// Global mutex for protecting critical sections
+// Define global mutex and atomic flag
 pthread_mutex_t send_receive_mutex = PTHREAD_MUTEX_INITIALIZER;
-// Atomic flag to check if send_request_and_receive_response is in progress
 atomic_bool send_receive_in_progress = false;
 #ifdef EXIT
 volatile sig_atomic_t exit_requested = false;
 #endif
 
-
-
 #ifdef PROFILE
 FILE *log_file = NULL; // Global file descriptor
 #endif
 
+
+// Function to post a receive work request
 void
 post_receive()
 {
@@ -75,59 +70,7 @@ post_receive()
 	}
 }
 
-void
-handshake()
-{
-	struct ibv_wc wc;
-
-	printf("Starting handshake...\n");
-
-	// Send client's RDMA buffer address and rkey to the server using RDMA Write
-	struct ibv_send_wr send_wr, *bad_send_wr = NULL;
-	struct ibv_sge send_sge;
-	memset(&send_wr, 0, sizeof(send_wr));
-	send_wr.wr_id = 1;
-	send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-	send_wr.send_flags = IBV_SEND_SIGNALED;
-	send_wr.wr.rdma.remote_addr = server_addr;
-	send_wr.wr.rdma.rkey = server_rkey;
-	send_sge.addr = (uintptr_t)buffer;
-	send_sge.length = sizeof(uint64_t) + sizeof(uint32_t); // Size of address + rkey
-	send_sge.lkey = mr->lkey;
-	send_wr.sg_list = &send_sge;
-	send_wr.num_sge = 1;
-	send_wr.imm_data = htonl(0x1234); // Immediate data to identify the message
-
-	// Add a delay before sending the RDMA Write with Immediate Data
-	sleep(1);
-
-	printf("Posting send WR...\n");
-	if (ibv_post_send(conn->qp, &send_wr, &bad_send_wr))
-	{
-		perror("ibv_post_send");
-		exit(1);
-	}
-
-	sleep(1);
-
-	// Wait for send completion
-	printf("Waiting for send completion...\n");
-	while (ibv_poll_cq(cq, 1, &wc) < 1)
-	{
-	}
-	if (wc.status != IBV_WC_SUCCESS)
-	{
-		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
-		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
-		exit(1);
-	}
-	printf("Send completion received.\n");
-
-	post_receive();
-
-	printf("Client: Handshake success...\n");
-}
-
+// Function to send a request and receive a response
 void
 send_request_and_receive_response()
 {
@@ -458,7 +401,6 @@ main(int argc, char **argv)
 		return -1;
 	}
 #endif
-
 	while (1)
 	{
 		pause(); // Wait for a signal to be caught
