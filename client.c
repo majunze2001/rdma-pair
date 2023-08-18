@@ -14,6 +14,10 @@
 #include <stdatomic.h>
 #include <stdbool.h> // Add this line
 
+// #define PROFILE
+// #define UVM
+// #define EXIT
+
 // BUFFER_SIZE ALL ACROSS
 #define BUFFER_SIZE (2 * 1024 * 1024 + 4 * 1024) // 2MB + 4KB
 
@@ -29,7 +33,6 @@ int fd;
 int ret;
 uint64_t server_addr;
 uint32_t server_rkey;
-struct mr_info *server_mr;
 
 struct mr_info
 {
@@ -41,10 +44,11 @@ struct mr_info
 pthread_mutex_t send_receive_mutex = PTHREAD_MUTEX_INITIALIZER;
 // Atomic flag to check if send_request_and_receive_response is in progress
 atomic_bool send_receive_in_progress = false;
+#ifdef EXIT
 volatile sig_atomic_t exit_requested = false;
+#endif
 
-#define PROFILE
-#define UVM
+
 
 #ifdef PROFILE
 FILE *log_file = NULL; // Global file descriptor
@@ -85,8 +89,8 @@ handshake()
 	send_wr.wr_id = 1;
 	send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
 	send_wr.send_flags = IBV_SEND_SIGNALED;
-	send_wr.wr.rdma.remote_addr = server_mr->remote_addr;
-	send_wr.wr.rdma.rkey = server_mr->rkey;
+	send_wr.wr.rdma.remote_addr = server_addr;
+	send_wr.wr.rdma.rkey = server_rkey;
 	send_sge.addr = (uintptr_t)buffer;
 	send_sge.length = sizeof(uint64_t) + sizeof(uint32_t); // Size of address + rkey
 	send_sge.lkey = mr->lkey;
@@ -127,8 +131,8 @@ handshake()
 void
 send_request_and_receive_response()
 {
-	// const char *request = "Request from server!";
-	// strcpy(buffer, request);
+	const char *request = "Request from server!";
+	strcpy(buffer, request);
 #ifdef PROFILE
 	struct timespec start_time, end_time, time1, time2, time3, time4, time5;
 	clock_gettime(CLOCK_MONOTONIC, &start_time);
@@ -139,6 +143,7 @@ send_request_and_receive_response()
 	clock_gettime(CLOCK_MONOTONIC, &time1); // lock
 #endif
 	// Post RDMA Write with Immediate Data request to server
+	printf("Post Write  Message\n");
 	struct ibv_send_wr send_wr, *bad_send_wr = NULL;
 	struct ibv_sge send_sge;
 	memset(&send_wr, 0, sizeof(send_wr));
@@ -162,6 +167,7 @@ send_request_and_receive_response()
 	clock_gettime(CLOCK_MONOTONIC, &time2); // Post RDMA Write request
 #endif
 	// Wait for send completion
+	printf("Waitfor send completion ...\n");
 	struct ibv_wc wc;
 	while (ibv_poll_cq(cq, 1, &wc) < 1)
 	{
@@ -175,6 +181,7 @@ send_request_and_receive_response()
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time3); // Wait for send completion
 #endif
+	printf("post_receiven ...\n");
 	post_receive();
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time4); // Post receive request
@@ -190,6 +197,8 @@ send_request_and_receive_response()
 		exit(1);
 	}
 
+	printf("Received: %s\n", buffer);
+
 	atomic_store(&send_receive_in_progress, false);
 	pthread_mutex_unlock(&send_receive_mutex);
 #ifdef PROFILE
@@ -203,7 +212,6 @@ send_request_and_receive_response()
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &end_time); // unlock
 #endif
-
 
 #ifdef PROFILE
 	// log
@@ -246,9 +254,12 @@ sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
 	send_request_and_receive_response();
+	#ifdef EXIT
 	exit_requested = true;
+	#endif
 }
 
+#ifdef UVM
 void
 sigio_handler(int sig)
 {
@@ -270,6 +281,7 @@ sigio_handler(int sig)
 	}
 	printf("sigio_handler done\n");
 }
+#endif
 
 int
 main(int argc, char **argv)
@@ -279,7 +291,9 @@ main(int argc, char **argv)
 	struct ibv_qp_init_attr qp_attr;
 
 	signal(SIGINT, sigint_handler);
+#ifdef UVM
 	signal(SIGIO, sigio_handler);
+#endif
 
 #ifdef PROFILE
 	log_file = fopen("timing_log_immediate.txt", "a");
@@ -366,6 +380,8 @@ main(int argc, char **argv)
 		perror("ibv_reg_mr");
 		return 1;
 	}
+	printf("Client: key %u\n", mr->rkey);
+	printf("Client: addr %lx\n", (uintptr_t)buffer);
 
 	printf("Creating CQ...\n");
 	cq = ibv_create_cq(conn->verbs, 10, NULL, NULL, 0);
@@ -387,6 +403,10 @@ main(int argc, char **argv)
 
 	printf("Connecting...\n");
 	struct rdma_conn_param cm_params = {0};
+	struct mr_info mr_info = {(uintptr_t)buffer, mr->rkey};
+	cm_params.private_data = &mr_info;
+	cm_params.private_data_len = sizeof(mr_info);
+	cm_params.responder_resources = 1;
 	cm_params.initiator_depth = 1;
 	if (rdma_connect(conn, &cm_params))
 	{
@@ -400,23 +420,30 @@ main(int argc, char **argv)
 		perror("rdma_get_cm_event");
 		return 1;
 	}
-	server_mr = (struct mr_info *)event->param.conn.private_data;
-	rdma_ack_cm_event(event);
 
-	// Extract server's buffer address and rkey from the payload
-	memcpy(&server_mr->remote_addr, buffer, sizeof(server_addr));
-	memcpy(&server_mr->rkey, buffer + sizeof(server_addr), sizeof(server_rkey));
-	printf("server_rkey: %u\n", server_rkey);
-	printf("server_addr: %lx\n", server_addr);
+	if (event->event == RDMA_CM_EVENT_ESTABLISHED)
+	{
+		struct mr_info * server_mr = (struct mr_info *)event->param.conn.private_data;
+		if (server_mr == NULL)
+		{
+			fprintf(stderr, "Private data is NULL\n");
+			return 1;
+		}
+		// Extract server keys
+		memcpy(&server_addr, &server_mr->remote_addr, sizeof(server_addr));
+		memcpy(&server_rkey, &server_mr->rkey, sizeof(server_rkey));
 
-	printf("key: %u\n", mr->rkey);
-	printf("addr: %lx\n", (uintptr_t)buffer);
+		printf("server_addr: %lx\n", server_addr);
+		printf("server_rkey: %u\n", server_rkey);
+	}
+	else
+	{
+		fprintf(stderr, "Unexpected event: %s\n", rdma_event_str(event->event));
+		return 1;
+	}
 
-	memcpy(buffer, &buffer, sizeof(buffer));
-	memcpy(buffer + sizeof(buffer), &mr->rkey, sizeof(mr->rkey));
 
-	handshake();
-
+#ifdef UVM
 	fd = open("/dev/nvidia-uvm", O_RDWR);
 	if (fd == -1)
 	{
@@ -430,13 +457,17 @@ main(int argc, char **argv)
 		printf("SET_BUFFER failed\n");
 		return -1;
 	}
+#endif
+
 	while (1)
 	{
 		pause(); // Wait for a signal to be caught
+		#ifdef EXIT
 		if (exit_requested)
 		{
 			goto cleanup;
 		}
+		#endif
 	}
 
 cleanup:
