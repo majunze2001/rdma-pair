@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-#define BUFFER_SIZE (2 * 1024 * 1024 + 4 * 1024) // 2MB + 4KB
+#define PAGE_SIZE (2 * 1024 * 1024) // 2MB
 
 // Structure to hold remote memory region information
 struct mr_info
@@ -31,7 +31,8 @@ uint32_t client_rkey;
 size_t buffer_size;
 
 // Function to post a receive work request
-void post_receive()
+void
+post_receive()
 {
 	printf("Posting a receive WR...\n");
 	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
@@ -39,7 +40,7 @@ void post_receive()
 	memset(&recv_wr, 0, sizeof(recv_wr));
 	recv_wr.wr_id = 1;
 	recv_sge.addr = (uintptr_t)buffer;
-	recv_sge.length = BUFFER_SIZE;
+	recv_sge.length = buffer_size;
 	recv_sge.lkey = mr->lkey;
 	recv_wr.sg_list = &recv_sge;
 	recv_wr.num_sge = 1;
@@ -50,8 +51,22 @@ void post_receive()
 	}
 }
 
+void
+init_buffer()
+{
+	int i;
+	char str[100];
+
+	for (i = 0; i < buffer_size / PAGE_SIZE; i++)
+	{
+		snprintf(str, sizeof(str), "Page [%d]", i);
+		strcpy(buffer + i * PAGE_SIZE, str);
+	}
+}
+
 // Main loop to handle client requests and send responses
-void main_loop(uint64_t client_addr, uint32_t client_rkey)
+void
+main_loop(uint64_t client_addr, uint32_t client_rkey)
 {
 	struct ibv_wc wc;
 
@@ -60,7 +75,9 @@ void main_loop(uint64_t client_addr, uint32_t client_rkey)
 		post_receive();
 
 		printf("Waiting for client request...\n");
-		while (ibv_poll_cq(cq, 1, &wc) < 1) {}
+		while (ibv_poll_cq(cq, 1, &wc) < 1)
+		{
+		}
 		if (wc.status != IBV_WC_SUCCESS || wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM)
 		{
 			fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
@@ -81,7 +98,7 @@ void main_loop(uint64_t client_addr, uint32_t client_rkey)
 		send_wr.wr.rdma.remote_addr = client_addr;
 		send_wr.wr.rdma.rkey = client_rkey;
 		send_sge.addr = (uintptr_t)buffer;
-		send_sge.length = BUFFER_SIZE;
+		send_sge.length = PAGE_SIZE;
 		send_sge.lkey = mr->lkey;
 		send_wr.sg_list = &send_sge;
 		send_wr.num_sge = 1;
@@ -91,7 +108,9 @@ void main_loop(uint64_t client_addr, uint32_t client_rkey)
 			exit(1);
 		}
 
-		while (ibv_poll_cq(cq, 1, &wc) < 1) {}
+		while (ibv_poll_cq(cq, 1, &wc) < 1)
+		{
+		}
 		if (wc.status != IBV_WC_SUCCESS)
 		{
 			fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
@@ -101,7 +120,8 @@ void main_loop(uint64_t client_addr, uint32_t client_rkey)
 	}
 }
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
 	// Initialize server address
 	memset(&addr, 0, sizeof(addr));
@@ -188,17 +208,18 @@ int main(int argc, char **argv)
 
 	// Allocate buffer using huge pages and register memory
 	printf("Allocating buffer and registering memory...\n");
-	buffer = mmap(NULL, BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+	buffer = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 	if (buffer == MAP_FAILED)
 	{
 		perror("mmap");
 		return 1;
 	}
-	memset(buffer, 0, BUFFER_SIZE);
-	mr = ibv_reg_mr(pd, buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+	memset(buffer, 0, buffer_size);
+	mr = ibv_reg_mr(pd, buffer, buffer_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
 	printf("key: %u\n", mr->rkey);
 	printf("addr: %lx\n", (uintptr_t)buffer);
-
+	init_buffer();
+	
 	// Create completion queue
 	printf("Creating completion queue...\n");
 	cq = ibv_create_cq(conn->verbs, 10, NULL, NULL, 0);
@@ -254,7 +275,7 @@ int main(int argc, char **argv)
 	// Clean up connection-specific resources
 	ibv_destroy_qp(conn->qp);
 	ibv_dereg_mr(mr);
-	munmap(buffer, BUFFER_SIZE);
+	munmap(buffer, buffer_size);
 	rdma_destroy_id(conn);
 
 	// Clean up listener resources

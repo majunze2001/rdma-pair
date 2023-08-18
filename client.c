@@ -21,6 +21,10 @@
 #define REMOTE_PAGENUM 10
 #define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
+// #define PROFILE
+// #define EXIT
+// #define UVM
+
 // Define global variables
 struct rdma_cm_id *conn = NULL;
 struct ibv_pd *pd;
@@ -31,6 +35,7 @@ int fd;
 int ret;
 uint64_t server_addr;
 uint32_t server_rkey;
+int next_page = 0;
 
 struct mr_info
 {
@@ -71,6 +76,48 @@ post_receive()
 		exit(1);
 	}
 }
+
+void read_page(uintptr_t addr)
+{
+    struct ibv_send_wr send_wr, *bad_send_wr = NULL;
+    struct ibv_sge send_sge;
+    struct ibv_wc wc;
+
+    // Initialize the send work request
+    memset(&send_wr, 0, sizeof(send_wr));
+    send_wr.wr_id = 1;
+    send_wr.opcode = IBV_WR_RDMA_READ;
+    send_wr.send_flags = IBV_SEND_SIGNALED;
+    send_wr.wr.rdma.remote_addr = addr;
+    send_wr.wr.rdma.rkey = server_rkey;
+    send_sge.addr = (uintptr_t)buffer;
+    send_sge.length = BUFFER_SIZE;
+    send_sge.lkey = mr->lkey;
+    send_wr.sg_list = &send_sge;
+    send_wr.num_sge = 1;
+
+    // Post the RDMA read request
+    if (ibv_post_send(conn->qp, &send_wr, &bad_send_wr))
+    {
+        perror("ibv_post_send");
+        exit(1);
+    }
+
+    // Wait for send completion
+    while (ibv_poll_cq(cq, 1, &wc) < 1)
+    {
+    }
+    if (wc.status != IBV_WC_SUCCESS)
+    {
+        fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
+                ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
+        exit(1);
+    }
+
+    // Print the fetched data as a string
+    printf("Fetched data: %s\n", buffer);
+}
+
 
 // Function to send a request and receive a response
 void
@@ -190,7 +237,8 @@ void
 sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
-	send_request_and_receive_response();
+	// send_request_and_receive_response();
+	read_page(server_addr + (next_page % REMOTE_PAGENUM) * REMOTE_SIZE);
 #ifdef EXIT
 	exit_requested = true;
 #endif
