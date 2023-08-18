@@ -9,13 +9,14 @@
 
 #define BUFFER_SIZE (2 * 1024 * 1024 + 4 * 1024) // 2MB + 4KB
 
+// Structure to hold remote memory region information
 struct mr_info
 {
 	uintptr_t remote_addr;
 	uint32_t rkey;
 };
 
-
+// Global variables
 struct sockaddr_in addr;
 struct rdma_cm_id *listener = NULL, *conn = NULL;
 struct rdma_event_channel *ec = NULL;
@@ -27,10 +28,9 @@ char *buffer;
 uint64_t client_addr;
 uint32_t client_rkey;
 
-void
-post_receive()
+// Function to post a receive work request
+void post_receive()
 {
-	// Post a receive WR to the server's receive queue
 	printf("Posting a receive WR...\n");
 	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
 	struct ibv_sge recv_sge;
@@ -48,54 +48,8 @@ post_receive()
 	}
 }
 
-void
-handshake()
-{
-	struct ibv_wc wc;
-
-	printf("Handshake start\n");
-
-	// Post a receive WR to the server's receive queue
-	printf("Posting a receive WR...\n");
-	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
-	struct ibv_sge recv_sge;
-	memset(&recv_wr, 0, sizeof(recv_wr));
-	recv_wr.wr_id = 1;
-	recv_sge.addr = (uintptr_t)buffer;
-	recv_sge.length = sizeof(uint64_t) + sizeof(uint32_t); // Size of client's address + rkey
-	recv_sge.lkey = mr->lkey;
-	recv_wr.sg_list = &recv_sge;
-	recv_wr.num_sge = 1;
-	if (ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr))
-	{
-		perror("ibv_post_recv");
-		exit(1);
-	}
-
-	// Wait for client's RDMA Write containing its buffer address and rkey
-	printf("Waiting for client's buffer info...\n");
-	while (ibv_poll_cq(cq, 1, &wc) < 1)
-	{
-	}
-	if (wc.status != IBV_WC_SUCCESS || wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM)
-	{
-		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
-		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
-		exit(1);
-	}
-	printf("Received client's buffer info.\n");
-
-	// Extract client's buffer address and rkey from the received payload
-	memcpy(&client_addr, buffer, sizeof(client_addr));
-	memcpy(&client_rkey, buffer + sizeof(client_addr), sizeof(client_rkey));
-
-	printf("client_rkey: %u\n", client_rkey);
-	printf("client_addr: %lx\n", client_addr);
-	printf("Server: handshake success...\n");
-}
-
-void
-main_loop(uint64_t client_addr, uint32_t client_rkey)
+// Main loop to handle client requests and send responses
+void main_loop(uint64_t client_addr, uint32_t client_rkey)
 {
 	struct ibv_wc wc;
 
@@ -103,11 +57,8 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 	{
 		post_receive();
 
-		// Wait for client's RDMA Write with Immediate Data
 		printf("Waiting for client request...\n");
-		while (ibv_poll_cq(cq, 1, &wc) < 1)
-		{
-		}
+		while (ibv_poll_cq(cq, 1, &wc) < 1) {}
 		if (wc.status != IBV_WC_SUCCESS || wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM)
 		{
 			fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
@@ -115,10 +66,8 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 			exit(1);
 		}
 
-		// Print the received request
 		printf("Received request: %s\n", buffer);
 
-		// Send response back to the client using RDMA Write with Immediate Data
 		const char *response = "Response from server!";
 		strcpy(buffer, response);
 		struct ibv_send_wr send_wr, *bad_send_wr = NULL;
@@ -140,10 +89,7 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 			exit(1);
 		}
 
-		// Wait for send completion
-		while (ibv_poll_cq(cq, 1, &wc) < 1)
-		{
-		}
+		while (ibv_poll_cq(cq, 1, &wc) < 1) {}
 		if (wc.status != IBV_WC_SUCCESS)
 		{
 			fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
@@ -153,15 +99,15 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 	}
 }
 
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
-
+	// Initialize server address
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(5000);
 	inet_pton(AF_INET, "10.10.10.221", &addr.sin_addr);
 
+	// Create event channel
 	printf("Creating event channel...\n");
 	ec = rdma_create_event_channel();
 	if (!ec)
@@ -170,6 +116,7 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	// Create RDMA ID for listening
 	printf("Creating RDMA ID...\n");
 	if (rdma_create_id(ec, &listener, NULL, RDMA_PS_TCP))
 	{
@@ -177,6 +124,7 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	// Bind address to RDMA ID
 	printf("Binding address...\n");
 	if (rdma_bind_addr(listener, (struct sockaddr *)&addr))
 	{
@@ -184,6 +132,7 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	// Start listening for incoming connections
 	printf("Listening...\n");
 	if (rdma_listen(listener, 10))
 	{
@@ -193,7 +142,7 @@ main(int argc, char **argv)
 
 	printf("Server is listening at %s:5000\n", "10.10.10.221");
 
-	// Accept connection
+	// Accept incoming connection and process client requests
 	printf("Waiting for connection...\n");
 	struct rdma_cm_event *event;
 	if (rdma_get_cm_event(ec, &event))
@@ -206,6 +155,20 @@ main(int argc, char **argv)
 	{
 		fprintf(stderr, "Unexpected event: %s\n", rdma_event_str(event->event));
 		return 1;
+	}
+	else
+	{
+		struct mr_info *client_mr = (struct mr_info *)event->param.conn.private_data;
+		if (client_mr == NULL)
+		{
+			fprintf(stderr, "Private data is NULL\n");
+			return 1;
+		}
+		memcpy(&client_addr, &client_mr->remote_addr, sizeof(client_addr));
+		memcpy(&client_rkey, &client_mr->rkey, sizeof(client_rkey));
+
+		printf("client_addr: %lx\n", client_addr);
+		printf("client_rkey: %u\n", client_rkey);
 	}
 	conn = event->id;
 	rdma_ack_cm_event(event);
@@ -229,10 +192,14 @@ main(int argc, char **argv)
 	}
 	memset(buffer, 0, BUFFER_SIZE);
 	mr = ibv_reg_mr(pd, buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+	printf("key: %u\n", mr->rkey);
+	printf("addr: %lx\n", (uintptr_t)buffer);
 
+	// Create completion queue
 	printf("Creating completion queue...\n");
 	cq = ibv_create_cq(conn->verbs, 10, NULL, NULL, 0);
 
+	// Create queue pair
 	printf("Creating queue pair...\n");
 	memset(&qp_attr, 0, sizeof(qp_attr));
 	qp_attr.qp_type = IBV_QPT_RC;
@@ -248,6 +215,7 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	// Accept RDMA connection
 	printf("Accepting RDMA connection...\n");
 	struct rdma_conn_param cm_params = {0};
 	struct mr_info mr_info = {(uintptr_t)buffer, mr->rkey};
@@ -261,12 +229,14 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	// Get CM event
 	printf("Getting CM event...\n");
 	if (rdma_get_cm_event(ec, &event))
 	{
 		perror("rdma_get_cm_event");
 		return 1;
 	}
+
 	if (event->event != RDMA_CM_EVENT_ESTABLISHED)
 	{
 		fprintf(stderr, "Unexpected event: %s\n", rdma_event_str(event->event));
@@ -274,7 +244,7 @@ main(int argc, char **argv)
 	}
 	rdma_ack_cm_event(event);
 
-	handshake();
+	// Enter main loop to handle client requests
 	main_loop(client_addr, client_rkey);
 
 	// Clean up connection-specific resources
