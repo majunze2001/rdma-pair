@@ -27,129 +27,41 @@ struct ibv_cq *cq;
 char *buffer;
 int fd;
 int ret;
-uint64_t server_addr;
-uint32_t server_rkey;
-struct mr_info *server_mr;
-
-struct mr_info
-{
-	uintptr_t remote_addr;
-	uint32_t rkey;
-};
-
 // Global mutex for protecting critical sections
 pthread_mutex_t send_receive_mutex = PTHREAD_MUTEX_INITIALIZER;
 // Atomic flag to check if send_request_and_receive_response is in progress
 atomic_bool send_receive_in_progress = false;
-volatile sig_atomic_t exit_requested = false;
+
 
 #define PROFILE
-#define UVM
 
 #ifdef PROFILE
 FILE *log_file = NULL; // Global file descriptor
 #endif
 
 void
-post_receive()
-{
-	// Post a receive WR to the server's receive queue
-	printf("Posting a receive WR...\n");
-	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
-	struct ibv_sge recv_sge;
-	memset(&recv_wr, 0, sizeof(recv_wr));
-	recv_wr.wr_id = 1;
-	recv_sge.addr = (uintptr_t)buffer;
-	recv_sge.length = BUFFER_SIZE;
-	recv_sge.lkey = mr->lkey;
-	recv_wr.sg_list = &recv_sge;
-	recv_wr.num_sge = 1;
-	if (ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr))
-	{
-		perror("ibv_post_recv");
-		exit(1);
-	}
-}
-
-void
-handshake()
-{
-	struct ibv_wc wc;
-
-	printf("Starting handshake...\n");
-
-	// Send client's RDMA buffer address and rkey to the server using RDMA Write
-	struct ibv_send_wr send_wr, *bad_send_wr = NULL;
-	struct ibv_sge send_sge;
-	memset(&send_wr, 0, sizeof(send_wr));
-	send_wr.wr_id = 1;
-	send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-	send_wr.send_flags = IBV_SEND_SIGNALED;
-	send_wr.wr.rdma.remote_addr = server_mr->remote_addr;
-	send_wr.wr.rdma.rkey = server_mr->rkey;
-	send_sge.addr = (uintptr_t)buffer;
-	send_sge.length = sizeof(uint64_t) + sizeof(uint32_t); // Size of address + rkey
-	send_sge.lkey = mr->lkey;
-	send_wr.sg_list = &send_sge;
-	send_wr.num_sge = 1;
-	send_wr.imm_data = htonl(0x1234); // Immediate data to identify the message
-
-	// Add a delay before sending the RDMA Write with Immediate Data
-	sleep(1);
-
-	printf("Posting send WR...\n");
-	if (ibv_post_send(conn->qp, &send_wr, &bad_send_wr))
-	{
-		perror("ibv_post_send");
-		exit(1);
-	}
-
-	sleep(1);
-
-	// Wait for send completion
-	printf("Waiting for send completion...\n");
-	while (ibv_poll_cq(cq, 1, &wc) < 1)
-	{
-	}
-	if (wc.status != IBV_WC_SUCCESS)
-	{
-		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
-		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
-		exit(1);
-	}
-	printf("Send completion received.\n");
-
-	post_receive();
-
-	printf("Client: Handshake success...\n");
-}
-
-void
 send_request_and_receive_response()
 {
-	// const char *request = "Request from server!";
-	// strcpy(buffer, request);
 #ifdef PROFILE
 	struct timespec start_time, end_time, time1, time2, time3, time4, time5;
 	clock_gettime(CLOCK_MONOTONIC, &start_time);
 #endif
 	pthread_mutex_lock(&send_receive_mutex);
+	// Set the atomic flag
 	atomic_store(&send_receive_in_progress, true);
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time1); // lock
 #endif
-	// Post RDMA Write with Immediate Data request to server
+	// Post send request
 	struct ibv_send_wr send_wr, *bad_send_wr = NULL;
 	struct ibv_sge send_sge;
 	memset(&send_wr, 0, sizeof(send_wr));
 	send_wr.wr_id = 1;
-	send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+	send_wr.opcode = IBV_WR_SEND;
 	send_wr.send_flags = IBV_SEND_SIGNALED;
-	send_wr.wr.rdma.remote_addr = server_addr;
-	send_wr.wr.rdma.rkey = server_rkey;
 	send_sge.addr = (uintptr_t)buffer;
-	send_sge.length = BUFFER_SIZE;
-	// send_sge.length = strlen(buffer);
+	send_sge.length = strlen(buffer);
+	// send_sge.length = BUFFER_SIZE;
 	send_sge.lkey = mr->lkey;
 	send_wr.sg_list = &send_sge;
 	send_wr.num_sge = 1;
@@ -159,7 +71,7 @@ send_request_and_receive_response()
 		exit(1);
 	}
 #ifdef PROFILE
-	clock_gettime(CLOCK_MONOTONIC, &time2); // Post RDMA Write request
+	clock_gettime(CLOCK_MONOTONIC, &time2); // Post send request
 #endif
 	// Wait for send completion
 	struct ibv_wc wc;
@@ -175,25 +87,37 @@ send_request_and_receive_response()
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time3); // Wait for send completion
 #endif
-	post_receive();
+	// Post receive request
+	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
+	struct ibv_sge recv_sge;
+	memset(&recv_wr, 0, sizeof(recv_wr));
+	recv_wr.wr_id = 2;
+	recv_sge.addr = (uintptr_t)buffer;
+	recv_sge.length = BUFFER_SIZE;
+	recv_sge.lkey = mr->lkey;
+	recv_wr.sg_list = &recv_sge;
+	recv_wr.num_sge = 1;
+	if (ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr))
+	{
+		perror("ibv_post_recv");
+		exit(1);
+	}
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time4); // Post receive request
 #endif
-	// Wait for server's RDMA Write with Immediate Data response
+	// Wait for receive completion
 	while (ibv_poll_cq(cq, 1, &wc) < 1)
 	{
 	}
-	if (wc.status != IBV_WC_SUCCESS || wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM)
+	if (wc.status != IBV_WC_SUCCESS)
 	{
 		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
 		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
 		exit(1);
 	}
 
-	atomic_store(&send_receive_in_progress, false);
-	pthread_mutex_unlock(&send_receive_mutex);
 #ifdef PROFILE
-	clock_gettime(CLOCK_MONOTONIC, &time5); // Wait for server write
+	clock_gettime(CLOCK_MONOTONIC, &time5); // Wait for receive completion
 #endif
 
 	// Clear the atomic flag
@@ -203,7 +127,6 @@ send_request_and_receive_response()
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &end_time); // unlock
 #endif
-
 
 #ifdef PROFILE
 	// log
@@ -246,7 +169,6 @@ sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
 	send_request_and_receive_response();
-	exit_requested = true;
 }
 
 void
@@ -282,7 +204,7 @@ main(int argc, char **argv)
 	signal(SIGIO, sigio_handler);
 
 #ifdef PROFILE
-	log_file = fopen("timing_log_immediate.txt", "a");
+	log_file = fopen("timing_log.txt", "a");
 	if (!log_file)
 	{
 		perror("Failed to open log file");
@@ -360,6 +282,7 @@ main(int argc, char **argv)
 	}
 
 	memset(buffer, 0, BUFFER_SIZE);
+	strcpy(buffer, "0x5421DEF000");
 	mr = ibv_reg_mr(pd, buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
 	if (!mr)
 	{
@@ -387,7 +310,6 @@ main(int argc, char **argv)
 
 	printf("Connecting...\n");
 	struct rdma_conn_param cm_params = {0};
-	cm_params.initiator_depth = 1;
 	if (rdma_connect(conn, &cm_params))
 	{
 		perror("rdma_connect");
@@ -400,23 +322,9 @@ main(int argc, char **argv)
 		perror("rdma_get_cm_event");
 		return 1;
 	}
-	server_mr = (struct mr_info *)event->param.conn.private_data;
 	rdma_ack_cm_event(event);
 
-	// Extract server's buffer address and rkey from the payload
-	memcpy(&server_mr->remote_addr, buffer, sizeof(server_addr));
-	memcpy(&server_mr->rkey, buffer + sizeof(server_addr), sizeof(server_rkey));
-	printf("server_rkey: %u\n", server_rkey);
-	printf("server_addr: %lx\n", server_addr);
-
-	printf("key: %u\n", mr->rkey);
-	printf("addr: %lx\n", (uintptr_t)buffer);
-
-	memcpy(buffer, &buffer, sizeof(buffer));
-	memcpy(buffer + sizeof(buffer), &mr->rkey, sizeof(mr->rkey));
-
-	handshake();
-
+	printf("%s\n", buffer);
 	fd = open("/dev/nvidia-uvm", O_RDWR);
 	if (fd == -1)
 	{
@@ -433,13 +341,8 @@ main(int argc, char **argv)
 	while (1)
 	{
 		pause(); // Wait for a signal to be caught
-		if (exit_requested)
-		{
-			goto cleanup;
-		}
 	}
 
-cleanup:
 	// Clean up
 	printf("Cleaning up...\n");
 	ibv_destroy_qp(conn->qp);
