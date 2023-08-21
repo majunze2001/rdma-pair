@@ -34,7 +34,7 @@ size_t buffer_size;
 void
 post_receive()
 {
-	printf("Posting a receive WR...\n");
+	// printf("Posting a receive WR...\n");
 	struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
 	struct ibv_sge recv_sge;
 	memset(&recv_wr, 0, sizeof(recv_wr));
