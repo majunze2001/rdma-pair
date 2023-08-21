@@ -21,8 +21,8 @@
 #define REMOTE_PAGENUM 10
 #define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
-#define PROFILE
-// #define PROFILE_READ
+// #define PROFILE
+#define PROFILE_READ
 // #define EXIT
 // #define UVM
 
@@ -136,7 +136,7 @@ read_page(uintptr_t addr)
 
 // Function to send a request and receive a response
 void
-write_page()
+send_request_and_receive_response()
 {
 	const char *request = "Request from server!";
 	strcpy(buffer, request);
@@ -203,26 +203,27 @@ write_page()
 	// log
 	long total_time = (end_time.tv_sec - start_time.tv_sec) * 1e9 +
 	                  (end_time.tv_nsec - start_time.tv_nsec);
-	// long lock_time = (time1.tv_sec - start_time.tv_sec) * 1e9 +
-	//                  (time1.tv_nsec - start_time.tv_nsec);
-	// long ps_time = (time2.tv_sec - time1.tv_sec) * 1e9 +
-	//                (time2.tv_nsec - time1.tv_nsec);
-	// long ws_time = (time3.tv_sec - time2.tv_sec) * 1e9 +
-	//                (time3.tv_nsec - time2.tv_nsec);
-	// long pr_time = (time4.tv_sec - time3.tv_sec) * 1e9 +
-	//                (time4.tv_nsec - time3.tv_nsec);
-	// long wr_time = (time5.tv_sec - time4.tv_sec) * 1e9 +
-	//                (time5.tv_nsec - time4.tv_nsec);
-	// long unlock_time = (end_time.tv_sec - time5.tv_sec) * 1e9 +
-	//                    (end_time.tv_nsec - time5.tv_nsec);
+	long lock_time = (time1.tv_sec - start_time.tv_sec) * 1e9 +
+	                 (time1.tv_nsec - start_time.tv_nsec);
+	long ps_time = (time2.tv_sec - time1.tv_sec) * 1e9 +
+	               (time2.tv_nsec - time1.tv_nsec);
+	long ws_time = (time3.tv_sec - time2.tv_sec) * 1e9 +
+	               (time3.tv_nsec - time2.tv_nsec);
+	long pr_time = (time4.tv_sec - time3.tv_sec) * 1e9 +
+	               (time4.tv_nsec - time3.tv_nsec);
+	long wr_time = (time5.tv_sec - time4.tv_sec) * 1e9 +
+	               (time5.tv_nsec - time4.tv_nsec);
+	long unlock_time = (end_time.tv_sec - time5.tv_sec) * 1e9 +
+	                   (end_time.tv_nsec - time5.tv_nsec);
 	fprintf(log_file, "total_time %ld\n", total_time);
-	// fprintf(log_file, "lock_time %ld\n", lock_time);
-	// fprintf(log_file, "ps_time %ld\n", ps_time);
-	// fprintf(log_file, "ws_time %ld\n", ws_time);
-	// fprintf(log_file, "pr_time %ld\n", pr_time);
-	// fprintf(log_file, "wr_time %ld\n", wr_time);
-	// fprintf(log_file, "unlock_time %ld\n", unlock_time);
+	fprintf(log_file, "lock_time %ld\n", lock_time);
+	fprintf(log_file, "ps_time %ld\n", ps_time);
+	fprintf(log_file, "ws_time %ld\n", ws_time);
+	fprintf(log_file, "pr_time %ld\n", pr_time);
+	fprintf(log_file, "wr_time %ld\n", wr_time);
+	fprintf(log_file, "unlock_time %ld\n", unlock_time);
 	fflush(log_file); // Ensure it's written immediately
+	printf("Received response from server: %s\n", buffer);
 #endif
 }
 
@@ -230,9 +231,9 @@ void
 sigint_handler(int signum)
 {
 	printf("SIGINT received. Sending request to server...\n");
-	// read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-	// next_page++;
-	write_page();
+	// send_request_and_receive_response();
+	read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
+	next_page++;
 #ifdef EXIT
 	exit_requested = true;
 #endif
@@ -275,7 +276,7 @@ main(int argc, char **argv)
 #endif
 
 #ifdef PROFILE
-	log_file = fopen("write_log.txt", "a");
+	log_file = fopen("timing_log_immediate.txt", "a");
 	if (!log_file)
 	{
 		perror("Failed to open log file");

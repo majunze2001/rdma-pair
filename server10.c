@@ -88,6 +88,36 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 
 		printf("Received request: %s\n", buffer);
 
+		// const char *response = "Response from server!";
+		// strcpy(buffer, response);
+		// struct ibv_send_wr send_wr, *bad_send_wr = NULL;
+		// struct ibv_sge send_sge;
+		// memset(&send_wr, 0, sizeof(send_wr));
+		// send_wr.wr_id = 1;
+		// send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		// send_wr.send_flags = IBV_SEND_SIGNALED;
+		// send_wr.wr.rdma.remote_addr = client_addr;
+		// send_wr.wr.rdma.rkey = client_rkey;
+		// send_sge.addr = (uintptr_t)buffer;
+		// send_sge.length = PAGE_SIZE;
+		// send_sge.lkey = mr->lkey;
+		// send_wr.sg_list = &send_sge;
+		// send_wr.num_sge = 1;
+		// if (ibv_post_send(conn->qp, &send_wr, &bad_send_wr))
+		// {
+		// 	perror("ibv_post_send");
+		// 	exit(1);
+		// }
+
+		// while (ibv_poll_cq(cq, 1, &wc) < 1)
+		// {
+		// }
+		// if (wc.status != IBV_WC_SUCCESS)
+		// {
+		// 	fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
+		// 	        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
+		// 	exit(1);
+		// }
 	}
 }
 
