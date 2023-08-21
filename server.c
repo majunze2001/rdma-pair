@@ -73,9 +73,9 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 
 	while (1)
 	{
+		// printf("Waiting for client request...\n");
 		post_receive();
 
-		printf("Waiting for client request...\n");
 		while (ibv_poll_cq(cq, 1, &wc) < 1)
 		{
 		}
@@ -86,7 +86,7 @@ main_loop(uint64_t client_addr, uint32_t client_rkey)
 			exit(1);
 		}
 
-		printf("Received request: %s\n", buffer);
+		// printf("Received request: %s\n", buffer);
 
 	}
 }

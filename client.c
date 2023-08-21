@@ -185,8 +185,7 @@ write_page()
 		        ibv_wc_status_str(wc.status), wc.status, (int)wc.wr_id);
 		exit(1);
 	}
-	atomic_store(&send_receive_in_progress, false);
-	pthread_mutex_unlock(&send_receive_mutex);
+
 #ifdef PROFILE
 	clock_gettime(CLOCK_MONOTONIC, &time5); // Wait for server write
 #endif
@@ -444,12 +443,14 @@ main(int argc, char **argv)
 		return -1;
 	}
 #endif
-	// for (int i = 0; i < 1000000; i++)
-	// {
-	// 	read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-	// 	next_page++;
-	// }
-	while (1)
+	for (int i = 0; i < 1000000; i++)
+	{
+		// read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
+		// next_page++;
+		write_page();
+		usleep(500);
+	}
+	while (0)
 	{
 		pause(); // Wait for a signal to be caught
 #ifdef EXIT
