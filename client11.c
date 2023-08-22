@@ -15,33 +15,16 @@
 #include <stdbool.h> // Add this line
 
 // Define constants -- client will always use 2MB for read from now on
-#define BUFFER_SIZE 2 * 1024 * 1024         // 2MB + 4KB
-#define EVICTION_SIZE (2 * 1024 * 1024 * 2) // 2MB + 4KB
-#define SET_BUFFER 0x12345678               // also sets PID as current
+#define BUFFER_SIZE (2 * 1024 * 1024) // 2MB + 4KB
+#define SET_BUFFER 0x12345678         // also sets PID as current
 #define FAULT_HANDLED 0x12345679
 #define REMOTE_PAGENUM 10
 #define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
-// fault queue
-#define DEVICE_NAME "/dev/fault_queue"
-#define QUEUE_SIZE 32
-struct fault_task
-{
-	void *fault_va;
-	int processed;
-};
-struct fault_queue
-{
-	struct fault_task buffer[QUEUE_SIZE];
-	volatile int head;
-	volatile int tail;
-};
-struct fault_queue *queue;
-
 // #define PROFILE
-// #define PROFILE_READ
+#define PROFILE_READ
 // #define EXIT
-#define UVM
+// #define UVM
 
 // Define global variables
 struct rdma_cm_id *conn = NULL;
@@ -148,7 +131,7 @@ read_page(uintptr_t addr)
 	fflush(log_file);
 #endif
 	// Print the fetched data as a string
-	// printf("Fetched data: %s\n", buffer);
+	printf("Fetched data: %s\n", buffer);
 }
 
 // Function to send a request and receive a response
@@ -163,7 +146,9 @@ write_page()
 #endif
 	pthread_mutex_lock(&send_receive_mutex);
 	atomic_store(&send_receive_in_progress, true);
-
+#ifdef PROFILE
+	clock_gettime(CLOCK_MONOTONIC, &time1); // lock
+#endif
 	// Post RDMA Write with Immediate Data request to server
 	// printf("Post Write Message\n");
 	struct ibv_send_wr send_wr, *bad_send_wr = NULL;
@@ -185,7 +170,9 @@ write_page()
 		perror("ibv_post_send");
 		exit(1);
 	}
-
+#ifdef PROFILE
+	clock_gettime(CLOCK_MONOTONIC, &time2); // Post RDMA Write request
+#endif
 	// Wait for send completion
 	// printf("Waitfor send completion ...\n");
 	struct ibv_wc wc;
@@ -199,6 +186,10 @@ write_page()
 		exit(1);
 	}
 
+#ifdef PROFILE
+	clock_gettime(CLOCK_MONOTONIC, &time5); // Wait for server write
+#endif
+
 	// Clear the atomic flag
 	atomic_store(&send_receive_in_progress, false);
 	pthread_mutex_unlock(&send_receive_mutex);
@@ -211,8 +202,26 @@ write_page()
 	// log
 	long total_time = (end_time.tv_sec - start_time.tv_sec) * 1e9 +
 	                  (end_time.tv_nsec - start_time.tv_nsec);
+	// long lock_time = (time1.tv_sec - start_time.tv_sec) * 1e9 +
+	//                  (time1.tv_nsec - start_time.tv_nsec);
+	// long ps_time = (time2.tv_sec - time1.tv_sec) * 1e9 +
+	//                (time2.tv_nsec - time1.tv_nsec);
+	// long ws_time = (time3.tv_sec - time2.tv_sec) * 1e9 +
+	//                (time3.tv_nsec - time2.tv_nsec);
+	// long pr_time = (time4.tv_sec - time3.tv_sec) * 1e9 +
+	//                (time4.tv_nsec - time3.tv_nsec);
+	// long wr_time = (time5.tv_sec - time4.tv_sec) * 1e9 +
+	//                (time5.tv_nsec - time4.tv_nsec);
+	// long unlock_time = (end_time.tv_sec - time5.tv_sec) * 1e9 +
+	//                    (end_time.tv_nsec - time5.tv_nsec);
 	fprintf(log_file, "total_time %ld\n", total_time);
-	fflush(log_file);
+	// fprintf(log_file, "lock_time %ld\n", lock_time);
+	// fprintf(log_file, "ps_time %ld\n", ps_time);
+	// fprintf(log_file, "ws_time %ld\n", ws_time);
+	// fprintf(log_file, "pr_time %ld\n", pr_time);
+	// fprintf(log_file, "wr_time %ld\n", wr_time);
+	// fprintf(log_file, "unlock_time %ld\n", unlock_time);
+	fflush(log_file); // Ensure it's written immediately
 #endif
 }
 
@@ -240,7 +249,7 @@ sigio_handler(int sig)
 	// Check if send_request_and_receive_response is in progress
 	if (!atomic_load(&send_receive_in_progress))
 	{
-
+		send_request_and_receive_response();
 	}
 
 	ret = ioctl(fd, FAULT_HANDLED);
@@ -263,22 +272,6 @@ main(int argc, char **argv)
 #ifdef UVM
 	signal(SIGIO, sigio_handler);
 #endif
-
-	// fault queue
-	fd = open(DEVICE_NAME, O_RDWR);
-	if (fd < 0)
-	{
-		perror("open");
-		return 1;
-	}
-	queue = mmap(NULL, sizeof(struct fault_queue),
-	             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (queue == MAP_FAILED)
-	{
-		perror("mmap");
-		return 1;
-	}
-	printf("mmap success\n");
 
 #ifdef PROFILE
 	log_file = fopen("write_log.txt", "a");
@@ -359,7 +352,7 @@ main(int argc, char **argv)
 
 	// Allocate buffer using huge pages
 	printf("Allocating buffer...\n");
-	buffer = mmap(NULL, BUFFER_SIZE + EVICTION_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+	buffer = mmap(NULL, BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 	if (buffer == MAP_FAILED)
 	{
 		perror("mmap");
@@ -450,26 +443,16 @@ main(int argc, char **argv)
 		return -1;
 	}
 #endif
-	// for (int i = 0; i < 1000000; i++)
-	// {
-	// 	read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-	// 	next_page++;
-	// 	// write_page();
-	// 	// usleep(500);
-	// }
-	while (1)
+	for (int i = 0; i < 1000000; i++)
 	{
-		__sync_synchronize(); // Memory barrier
-		if (queue->head != queue->tail)
-		{
-			struct fault_task *task = &queue->buffer[queue->tail];
-			// Process the task...
-			read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-			next_page++;
-			task->processed = 1;
-			__sync_synchronize();
-			// user space program does not update the queue
-		}
+		read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
+		next_page++;
+		// write_page();
+		// usleep(500);
+	}
+	while (0)
+	{
+		pause(); // Wait for a signal to be caught
 #ifdef EXIT
 		if (exit_requested)
 		{

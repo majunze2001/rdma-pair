@@ -15,33 +15,17 @@
 #include <stdbool.h> // Add this line
 
 // Define constants -- client will always use 2MB for read from now on
-#define BUFFER_SIZE 2 * 1024 * 1024         // 2MB + 4KB
+#define BUFFER_SIZE 2 * 1024 * 1024 // 2MB + 4KB
 #define EVICTION_SIZE (2 * 1024 * 1024 * 2) // 2MB + 4KB
-#define SET_BUFFER 0x12345678               // also sets PID as current
+#define SET_BUFFER 0x12345678         // also sets PID as current
 #define FAULT_HANDLED 0x12345679
 #define REMOTE_PAGENUM 10
 #define REMOTE_SIZE (2 * 1024 * 1024 * REMOTE_PAGENUM)
 
-// fault queue
-#define DEVICE_NAME "/dev/fault_queue"
-#define QUEUE_SIZE 32
-struct fault_task
-{
-	void *fault_va;
-	int processed;
-};
-struct fault_queue
-{
-	struct fault_task buffer[QUEUE_SIZE];
-	volatile int head;
-	volatile int tail;
-};
-struct fault_queue *queue;
-
 // #define PROFILE
-// #define PROFILE_READ
+#define PROFILE_READ
 // #define EXIT
-#define UVM
+// #define UVM
 
 // Define global variables
 struct rdma_cm_id *conn = NULL;
@@ -148,7 +132,7 @@ read_page(uintptr_t addr)
 	fflush(log_file);
 #endif
 	// Print the fetched data as a string
-	// printf("Fetched data: %s\n", buffer);
+	printf("Fetched data: %s\n", buffer);
 }
 
 // Function to send a request and receive a response
@@ -212,7 +196,7 @@ write_page()
 	long total_time = (end_time.tv_sec - start_time.tv_sec) * 1e9 +
 	                  (end_time.tv_nsec - start_time.tv_nsec);
 	fprintf(log_file, "total_time %ld\n", total_time);
-	fflush(log_file);
+	fflush(log_file); 
 #endif
 }
 
@@ -240,7 +224,7 @@ sigio_handler(int sig)
 	// Check if send_request_and_receive_response is in progress
 	if (!atomic_load(&send_receive_in_progress))
 	{
-
+		send_request_and_receive_response();
 	}
 
 	ret = ioctl(fd, FAULT_HANDLED);
@@ -263,22 +247,6 @@ main(int argc, char **argv)
 #ifdef UVM
 	signal(SIGIO, sigio_handler);
 #endif
-
-	// fault queue
-	fd = open(DEVICE_NAME, O_RDWR);
-	if (fd < 0)
-	{
-		perror("open");
-		return 1;
-	}
-	queue = mmap(NULL, sizeof(struct fault_queue),
-	             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (queue == MAP_FAILED)
-	{
-		perror("mmap");
-		return 1;
-	}
-	printf("mmap success\n");
 
 #ifdef PROFILE
 	log_file = fopen("write_log.txt", "a");
@@ -450,26 +418,16 @@ main(int argc, char **argv)
 		return -1;
 	}
 #endif
-	// for (int i = 0; i < 1000000; i++)
-	// {
-	// 	read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-	// 	next_page++;
-	// 	// write_page();
-	// 	// usleep(500);
-	// }
-	while (1)
+	for (int i = 0; i < 1000000; i++)
 	{
-		__sync_synchronize(); // Memory barrier
-		if (queue->head != queue->tail)
-		{
-			struct fault_task *task = &queue->buffer[queue->tail];
-			// Process the task...
-			read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
-			next_page++;
-			task->processed = 1;
-			__sync_synchronize();
-			// user space program does not update the queue
-		}
+		read_page(server_addr + (next_page % REMOTE_PAGENUM) * BUFFER_SIZE);
+		next_page++;
+		// write_page();
+		// usleep(500);
+	}
+	while (0)
+	{
+		pause(); // Wait for a signal to be caught
 #ifdef EXIT
 		if (exit_requested)
 		{

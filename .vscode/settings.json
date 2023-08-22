@@ -2,6 +2,7 @@
     "files.associations": {
         "*.css": "tailwindcss",
         "unistd.h": "c",
-        "mman.h": "c"
+        "mman.h": "c",
+        "string.h": "c"
     }
 }
